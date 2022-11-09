@@ -1,8 +1,9 @@
-package BDSA_Handin_4
+package DISYS_Handin_4
 
 import (
 	"bufio"
 	"fmt"
+	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"log"
 	"net"
@@ -21,7 +22,8 @@ import (
 "os"
 "strconv"
 
-ping "github.com/NaddiNadja/peer-to-peer/grpc"
+ping "https://github.com/Tyyrid/DISYS-Handin-4/tree/main/proto"
+
 "google.golang.org/grpc"
 )
 

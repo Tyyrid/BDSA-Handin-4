@@ -4,7 +4,7 @@
 // - protoc             v3.21.7
 // source: proto/proto.proto
 
-package BDSA_Handin_4
+package ping
 
 import (
 	context "context"
