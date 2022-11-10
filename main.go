@@ -7,12 +7,19 @@ import (
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"log"
+	"math/rand"
 	"net"
 	"os"
 	"strconv"
+	"time"
 )
 
+var sureCounter int
+var higherIdCounter int
+var lowestTimeCounter int
+
 func main() {
+
 	arg1, _ := strconv.ParseInt(os.Args[1], 10, 32)
 	ownPort := int32(arg1) + 5000
 
@@ -20,10 +27,11 @@ func main() {
 	defer cancel()
 
 	p := &peer{
-		id:            ownPort,
-		amountOfPings: make(map[int32]int32),
-		clients:       make(map[int32]ping.PingClient),
-		ctx:           ctx,
+		id:               ownPort,
+		amountOfPings:    make(map[int32]int32),
+		clients:          make(map[int32]ping.PingClient),
+		ctx:              ctx,
+		lamportTimestamp: 1,
 	}
 
 	// Create listener tcp on port ownPort
@@ -60,7 +68,14 @@ func main() {
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
-		p.sendPingToAll()
+		p.input = scanner.Text()
+		if p.input == "can" {
+			p.wantsCar = true
+			fmt.Println("Der er blevet spurgt om bilen")
+			//kun sende hvis en ønsker bilen
+			p.askForCar()
+		}
+
 	}
 }
 
@@ -80,13 +95,82 @@ func (p *peer) Ping(ctx context.Context, req *ping.Request) (*ping.Reply, error)
 	return rep, nil
 }
 
-func (p *peer) sendPingToAll() {
-	request := &ping.Request{Id: p.id}
-	for id, client := range p.clients {
-		reply, err := client.Ping(p.ctx, request)
-		if err != nil {
-			fmt.Println("something went wrong")
-		}
-		fmt.Printf("Got reply from id %v: %v\n", id, reply.Amount)
+func (p *peer) criticalSection_GetTheCar(id int32) {
+	log.Printf("******** Peer %d entered critical section at!!!!!! ********* ", id)
+	time.Sleep(2)
+	p.wantsCar = false
+	sureCounter = 0
+	higherIdCounter = 0
+	lowestTimeCounter = 0
+}
+
+func (p *peer) askForCar() {
+	var highestId int32
+	var lowestTime int32
+	var lowestTimeId int32
+	//foregår hos en selv
+	userInput := &ping.UserInput{
+		ProcessId:        p.id,
+		LamportTimeStamp: int32(p.lamportTimestamp) + 1,
+		Input:            p.input,
 	}
+
+	for id, client := range p.clients {
+		request, err := client.AnswerRequest(p.ctx, userInput)
+		if err != nil {
+			fmt.Printf("something went wrong %v", err.Error())
+		}
+		fmt.Printf("Got request from id %v: %v\n", id, request.RequestMsg)
+		if request.RequestMsg == "sure" {
+			sureCounter++
+		}
+		if request.RequestMsg == "No, I want it, because i have a higher ID" {
+			//Find max id
+			if highestId < request.ProcessId {
+				highestId = request.ProcessId
+			}
+			higherIdCounter++
+			fmt.Println("highest id %d", highestId)
+			fmt.Println("highestidcounter %d", higherIdCounter)
+		}
+
+		//TODO: kig på det her
+		if request.RequestMsg == "No, I want it, because i asked first" {
+
+			if lowestTime > request.LamportTimeStamp {
+				lowestTime = request.LamportTimeStamp
+				lowestTimeId = request.ProcessId
+			}
+			if lowestTime == request.LamportTimeStamp {
+				if request.ProcessId > lowestTimeId {
+					lowestTimeId = request.ProcessId
+				}
+			}
+
+			lowestTimeCounter++
+			fmt.Printf("lowestTime %d", lowestTime)
+		}
+	}
+
+	if sureCounter == 2 {
+		p.criticalSection_GetTheCar(p.id)
+	}
+	if higherIdCounter == 2 {
+		p.criticalSection_GetTheCar(highestId)
+
+	}
+	if lowestTimeCounter == 2 {
+		p.criticalSection_GetTheCar(lowestTimeId)
+
+	} else {
+		sureCounter = 0
+		lowestTimeCounter = 0
+		higherIdCounter = 0
+	}
+
+}
+
+func randomBool() bool {
+	rand.Seed(time.Now().UnixNano())
+	return rand.Intn(2) == 1
 }
