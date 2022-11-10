@@ -9,6 +9,12 @@ service Ping {
   rpc AnswerRequest (UserInput) returns (Request) {}
 }
 
+message UserInput {
+  int32 ProcessId = 1;
+  int32 LamportTimeStamp = 2;
+  string Input = 3;
+}
+
 message Request {
   int32 ProcessId = 1;
   int32 LamportTimeStamp = 2;

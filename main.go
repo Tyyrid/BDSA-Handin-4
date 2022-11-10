@@ -26,6 +26,12 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	//generates a random start number for Lamport timestamp
+	/*min := 1
+	max := 4
+	rand.Seed(time.Now().UnixNano())
+	myLogicalTimestamp := rand.Intn(max-min) + min*/
+
 	p := &peer{
 		id:               ownPort,
 		amountOfPings:    make(map[int32]int32),
@@ -83,16 +89,69 @@ type peer struct {
 	ping.UnimplementedPingServer
 	id            int32
 	amountOfPings map[int32]int32
-	clients       map[int32]ping.PingClient
-	ctx           context.Context
+	//gemmer på de andre peers som er connected
+	clients          map[int32]ping.PingClient
+	ctx              context.Context
+	lamportTimestamp int
+	input            string
+	wantsCar         bool
 }
 
-func (p *peer) Ping(ctx context.Context, req *ping.Request) (*ping.Reply, error) {
-	id := req.Id
-	p.amountOfPings[id] += 1
+func (p *peer) AnswerRequest(ctx context.Context, userinput *ping.UserInput) (*ping.Request, error) {
+	//foregår hos de andre peers
+	processId := userinput.ProcessId
+	logicalTime := userinput.LamportTimeStamp
+	msg := userinput.Input
 
-	rep := &ping.Reply{Amount: p.amountOfPings[id]}
-	return rep, nil
+	//Generate random bool
+	//p.wantsCar = randomBool()
+
+	p.wantsCar = true
+
+	if p.wantsCar == false {
+		fmt.Println("I Dont want the car")
+		msg = "sure"
+
+	} else {
+
+		// Checks LamportTimeStamp
+		if int32(p.lamportTimestamp) == userinput.LamportTimeStamp {
+
+			fmt.Printf("p.id = %v og userinputid = %v", p.id, userinput.ProcessId)
+			//If they have the same LamportTimeStamp, checks an processID. Which one is the highest?
+			if p.id > userinput.ProcessId {
+				msg = "No, I want it, because i have a higher ID"
+				processId = p.id
+				//p.criticalSection_GetTheCar(p.id)
+			} else {
+				msg = "sure"
+
+			}
+
+		} else if int32(p.lamportTimestamp) < userinput.LamportTimeStamp {
+			//p.lamportTimestamp får bilen
+			msg = "No, I want it, because i asked first"
+			processId = p.id
+			//p.criticalSection_GetTheCar(p.id)
+
+		} else if int32(p.lamportTimestamp) > userinput.LamportTimeStamp {
+			//userinput.LamportTimeStamp får bilen
+			msg = "sure"
+		}
+
+	}
+
+	log.Printf("ping peer id: %s", processId)
+	log.Printf("ping msg: %s", userinput.Input)
+	log.Printf("ping Timestamp: %d", p.lamportTimestamp)
+
+	req := &ping.Request{
+		ProcessId:        processId,
+		LamportTimeStamp: logicalTime,
+		RequestMsg:       msg,
+	}
+
+	return req, nil
 }
 
 func (p *peer) criticalSection_GetTheCar(id int32) {
