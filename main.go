@@ -11,33 +11,24 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 )
 
-var sureCounter int
-var higherIdCounter int
-var lowestTimeCounter int
+var mu sync.Mutex
 
 func main() {
-
 	arg1, _ := strconv.ParseInt(os.Args[1], 10, 32)
-	ownPort := int32(arg1) + 5000
-
+	ownPort := int32(arg1) + 8080
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	//generates a random start number for Lamport timestamp
-	/*min := 1
-	max := 4
-	rand.Seed(time.Now().UnixNano())
-	myLogicalTimestamp := rand.Intn(max-min) + min*/
-
 	p := &peer{
 		id:               ownPort,
-		amountOfPings:    make(map[int32]int32),
 		clients:          make(map[int32]ping.PingClient),
 		ctx:              ctx,
-		lamportTimestamp: 1,
+		lamportTimestamp: randomInt(),  //this will stay the same through the entire session
+		wantsCar:         randomBool(), //this will stay the same through the entire session
 	}
 
 	// Create listener tcp on port ownPort
@@ -55,7 +46,7 @@ func main() {
 	}()
 
 	for i := 0; i < 3; i++ {
-		port := int32(5000) + int32(i)
+		port := int32(8080) + int32(i)
 
 		if port == ownPort {
 			continue
@@ -75,10 +66,10 @@ func main() {
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		p.input = scanner.Text()
-		if p.input == "can" {
+		if p.input == "May I have the car?" {
 			p.wantsCar = true
-			fmt.Println("Der er blevet spurgt om bilen")
-			//kun sende hvis en ønsker bilen
+			fmt.Printf("I want the car. My Lamport timestamp is: %d\n", p.lamportTimestamp)
+			//Peer requests car
 			p.askForCar()
 		}
 
@@ -87,149 +78,110 @@ func main() {
 
 type peer struct {
 	ping.UnimplementedPingServer
-	id            int32
-	amountOfPings map[int32]int32
-	//gemmer på de andre peers som er connected
+	id int32
+	//Stores the other peers that are connected
 	clients          map[int32]ping.PingClient
 	ctx              context.Context
 	lamportTimestamp int
 	input            string
 	wantsCar         bool
+	sureCounter      int
 }
 
 func (p *peer) AnswerRequest(ctx context.Context, userinput *ping.UserInput) (*ping.Request, error) {
-	//foregår hos de andre peers
-	processId := userinput.ProcessId
-	logicalTime := userinput.LamportTimeStamp
 	msg := userinput.Input
 
-	//Generate random bool
-	//p.wantsCar = randomBool()
-
-	p.wantsCar = true
-
 	if p.wantsCar == false {
-		fmt.Println("I Dont want the car")
+		fmt.Printf("I Dont want the car. My Lamport time stamp is: %d\n", p.lamportTimestamp)
 		msg = "sure"
 
 	} else {
 
 		// Checks LamportTimeStamp
 		if int32(p.lamportTimestamp) == userinput.LamportTimeStamp {
-
-			fmt.Printf("p.id = %v og userinputid = %v", p.id, userinput.ProcessId)
 			//If they have the same LamportTimeStamp, checks an processID. Which one is the highest?
 			if p.id > userinput.ProcessId {
 				msg = "No, I want it, because i have a higher ID"
-				processId = p.id
-				//p.criticalSection_GetTheCar(p.id)
+				fmt.Printf("No, I want it, because i have a higher ID. I will ask the others if I can get the car. My Lamport time stamp is: %d\n", p.lamportTimestamp)
+				p.askForCar()
 			} else {
 				msg = "sure"
-
+				fmt.Printf("sure. My lamportStamp is: %d\n", p.lamportTimestamp)
 			}
 
 		} else if int32(p.lamportTimestamp) < userinput.LamportTimeStamp {
 			//p.lamportTimestamp får bilen
 			msg = "No, I want it, because i asked first"
-			processId = p.id
-			//p.criticalSection_GetTheCar(p.id)
+			fmt.Printf("No, I want it, because i asked first. I will ask the others if I can get the car. My Lamport time stamp is: %d\n", p.lamportTimestamp)
+			p.askForCar()
 
 		} else if int32(p.lamportTimestamp) > userinput.LamportTimeStamp {
 			//userinput.LamportTimeStamp får bilen
 			msg = "sure"
+			fmt.Printf("sure. My Lamport timestamp is: %d\n", p.lamportTimestamp)
 		}
 
 	}
 
-	log.Printf("ping peer id: %s", processId)
-	log.Printf("ping msg: %s", userinput.Input)
-	log.Printf("ping Timestamp: %d", p.lamportTimestamp)
-
+	//The message to be returned
 	req := &ping.Request{
-		ProcessId:        processId,
-		LamportTimeStamp: logicalTime,
-		RequestMsg:       msg,
+		RequestMsg: msg,
 	}
 
 	return req, nil
 }
 
 func (p *peer) criticalSection_GetTheCar(id int32) {
-	log.Printf("******** Peer %d entered critical section at!!!!!! ********* ", id)
+	//safety - only one at the time
+	mu.Lock()
+	log.Printf("******** Peer %d entered critical section - I HAVE THE CAR!!!!!! ********* ", id)
 	time.Sleep(2)
 	p.wantsCar = false
-	sureCounter = 0
-	higherIdCounter = 0
-	lowestTimeCounter = 0
+	defer mu.Unlock()
 }
 
+// Peer asks for permission to get the car
 func (p *peer) askForCar() {
-	var highestId int32
-	var lowestTime int32
-	var lowestTimeId int32
-	//foregår hos en selv
 	userInput := &ping.UserInput{
 		ProcessId:        p.id,
-		LamportTimeStamp: int32(p.lamportTimestamp) + 1,
+		LamportTimeStamp: int32(p.lamportTimestamp),
 		Input:            p.input,
 	}
 
+	//Asks all the peers that are connected
 	for id, client := range p.clients {
 		request, err := client.AnswerRequest(p.ctx, userInput)
 		if err != nil {
 			fmt.Printf("something went wrong %v", err.Error())
 		}
-		fmt.Printf("Got request from id %v: %v\n", id, request.RequestMsg)
+		fmt.Printf("Got reply from id %v: %v\n", id, request.RequestMsg)
+
 		if request.RequestMsg == "sure" {
-			sureCounter++
-		}
-		if request.RequestMsg == "No, I want it, because i have a higher ID" {
-			//Find max id
-			if highestId < request.ProcessId {
-				highestId = request.ProcessId
-			}
-			higherIdCounter++
-			fmt.Println("highest id %d", highestId)
-			fmt.Println("highestidcounter %d", higherIdCounter)
-		}
-
-		//TODO: kig på det her
-		if request.RequestMsg == "No, I want it, because i asked first" {
-
-			if lowestTime > request.LamportTimeStamp {
-				lowestTime = request.LamportTimeStamp
-				lowestTimeId = request.ProcessId
-			}
-			if lowestTime == request.LamportTimeStamp {
-				if request.ProcessId > lowestTimeId {
-					lowestTimeId = request.ProcessId
-				}
-			}
-
-			lowestTimeCounter++
-			fmt.Printf("lowestTime %d", lowestTime)
+			p.sureCounter++
 		}
 	}
 
-	if sureCounter == 2 {
+	//Checks if the peer has received two 'sure' to get the car
+	if p.sureCounter == 2 {
 		p.criticalSection_GetTheCar(p.id)
+		p.sureCounter = 0
 	}
-	if higherIdCounter == 2 {
-		p.criticalSection_GetTheCar(highestId)
 
-	}
-	if lowestTimeCounter == 2 {
-		p.criticalSection_GetTheCar(lowestTimeId)
-
-	} else {
-		sureCounter = 0
-		lowestTimeCounter = 0
-		higherIdCounter = 0
-	}
+	//Sets the counter to zero for all peers
+	p.sureCounter = 0
 
 }
 
+// Sets a random value to wantsCar for each peer
 func randomBool() bool {
 	rand.Seed(time.Now().UnixNano())
 	return rand.Intn(2) == 1
+}
+
+// Generates a random start number for Lamport timestamp between 1 and 4
+func randomInt() int {
+	min := 1
+	max := 4
+	rand.Seed(time.Now().UnixNano())
+	return rand.Intn(max-min) + min
 }
